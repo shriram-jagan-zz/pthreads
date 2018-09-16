@@ -1,0 +1,6 @@
+
+Import('env')
+
+sourceFiles = ['main.c']
+
+env.Object(source=sourceFiles, variant_dir='build')

@@ -1,0 +1,13 @@
+import os
+
+# set variables that usually remain constant
+machine = 'mac' # accepted values: home, mac, work.
+
+VariantDir('build', 'src', duplicate=0)
+
+env = Environment()
+
+SConscript('src/SConscript', variant_dir='build', duplicate=0, exports='env')
+
+env.Program(target=['build/exec.x'], source = 'build/main.o')
+
