@@ -1,0 +1,36 @@
+import os
+
+# set variables that usually remain constant
+machine  = 'mac' # accepted values: home, mac, work.
+language = 'c'   # c or cpp
+isMPI    = False # MPI or serial code?
+
+VariantDir('build', 'src', duplicate=0)
+
+env = Environment()
+
+# For cpp, set up 
+if (language == 'cpp'):
+  env = Environment(CPPFLAGS = '-std=c++11')
+
+# if MPI code set up 
+if (isMPI):
+  if (language == 'cpp'):
+    if machine == 'home':
+      env['CXX'] = '/usr/lib64/openmpi/bin/mpic++'
+    if machine == 'mac':
+      env['CXX'] = '/usr/local/bin/mpic++' 
+      #env['CXX'] = '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/mpic++'
+  elif (language == 'c'):
+    if machine == 'home':
+      env['C'] = '/usr/lib64/openmpi/bin/mpicc'
+    if machine == 'mac':
+      env['C'] = '/usr/local/bin/mpicc'
+
+#print "CXX compiler is:", env['CXX']
+#print "CPPFLAGS is    :", env['CPPFLAGS']
+
+SConscript('src/SConscript', variant_dir='build', duplicate=0, exports='env')
+
+env.Program(target=['build/exec.x'], source = 'build/main.o')
+
