@@ -54,7 +54,8 @@ typedef struct BoundedBuffer_t_
 {
   order_t ** queue;
   int size;
-  int current;
+  int head; /* use by client thread */
+  int tail; /* used by trader thread */
   pthread_mutex_t bufLock;
 
 } BoundedBuffer_t;
@@ -107,7 +108,8 @@ Create_Bounded_Buffer(int bufSize)
     fprintf(stderr, "Unable to allocate memory (%s:%d)\n", __FILE__, __LINE__);
     return NULL;
   }
-  BoundedBuffer->current = 0;
+  BoundedBuffer->head = 0;
+  BoundedBuffer->tail = 0;
 
   return BoundedBuffer;
 }
@@ -126,7 +128,7 @@ Free_BoundedBuffer(BoundedBuffer_t *BoundedBuffer)
 static int
 isBufferFull(BoundedBuffer_t *BoundedBuffer)
 {
-  if (BoundedBuffer->size == BoundedBuffer->current)
+  if (BoundedBuffer->size == BoundedBuffer->head)
     return 1;
   else
     return 0;
@@ -188,18 +190,31 @@ clientThread(void *clientArg)
       /* lock the buffer before updating it */
       pthread_mutex_lock(&(ca->BoundedBuffer->bufLock));
 
-      if (isBufferFull(BoundedBuffer))
+      /* If the buffer is full, unlock the mutex so that the trader
+       * thread can work on it, and wait until trader thread has 
+       * finished. Update the buffer only if there is some space in it */
       {
-        pthread_mutex_unlock(&(ca->BoundedBuffer->bufLock));
-        continue;
-      }
+        /* this is to idex the ring buffer */
+        /*       | Both client and trader start here, and they move left
+         *       v if client moves faster, it will wait for trader to finish
+         * - - - - 
+         * 3 2 1 0
+         */
+        int next = (BoundedBuffer->head + 1) % BoundedBuffer->size;
 
-      /* Update the buffer only if there is some space in it */
-      if (BoundedBuffer->current < BoundedBuffer->size)
-      {
-        int current = BoundedBuffer->current;
-        BoundedBuffer->queue[current] = order;
-        BoundedBuffer->current = current++;
+        /* if head is 3 and size is 4, next will be 0. and if traderThread
+         * is still working on 0, then we need to wait for the trader
+         * to finish
+         */
+        if (next == BoundedBuffer->tail)
+        {
+          /* trader needs to work, unlock the buffer */
+          pthread_mutex_unlock(&(ca->BoundedBuffer->bufLock));
+          continue;
+        }
+
+        BoundedBuffer->queue[next] = order;
+        BoundedBuffer->head = next;
 
         /* Update that the client has queued one order */
         clientQueued = 1;
@@ -225,8 +240,8 @@ int main(int argc, char **argv)
 
   /* Known variables */
   int nBuf = 50;               /* Buffer size */
-  int nClientThreads = 4;
-  int nTraderThreads = 4;
+  int nClientThreads = 1;
+  int nTraderThreads = 1;
 
   int nMaxStocks = 500; 
 
