@@ -18,7 +18,7 @@
  *  Known:
  *  -----
  *   - Buffer size (this is the bounded buffer prorblme recast)
- *   - generate random stock quanitity, buy/sell action etc
+ *   - generate random stock quantity, buy/sell action etc
  *   - nClient and ntrader threads
  *   - 
  */
@@ -83,6 +83,7 @@ typedef struct trader_arg_t_
 {
   int id;
   int nTraderThreads;
+  int *done; /* this is a global variable; main updates it */
   market_t *market;
 
   BoundedBuffer_t *BoundedBuffer;
@@ -90,7 +91,7 @@ typedef struct trader_arg_t_
 } trader_arg_t;
 
 BoundedBuffer_t *
-Create_Bounded_Buffer(int bufSize)
+Create_Bounded_Buffer_And_Init_Order(int bufSize)
 {
   BoundedBuffer_t *BoundedBuffer;
 
@@ -101,7 +102,7 @@ Create_Bounded_Buffer(int bufSize)
     return NULL;
   }
 
-  BoundedBuffer->size = bufSize;
+  BoundedBuffer->size = bufSize + 1;
   BoundedBuffer->queue = (order_t **) malloc(sizeof(order_t *) * BoundedBuffer->size);
   if (BoundedBuffer->queue == NULL)
   {
@@ -110,6 +111,12 @@ Create_Bounded_Buffer(int bufSize)
   }
   BoundedBuffer->head = 0;
   BoundedBuffer->tail = 0;
+
+  /* init order */
+  memset(BoundedBuffer->queue, 0, sizeof(order_t *) * BoundedBuffer->size);
+
+  /* init the lock */
+  pthread_mutex_init(&(BoundedBuffer->bufLock), NULL);
 
   return BoundedBuffer;
 }
@@ -121,8 +128,8 @@ Free_BoundedBuffer(BoundedBuffer_t *BoundedBuffer)
 
   for (i = 0; i < BoundedBuffer->size; i++)
   {
-    int k;
   }
+  printf("\n free function not implemented yet");
 }
 
 static int
@@ -166,8 +173,8 @@ Free_Order(order_t *order)
  * and wait for the consumers to finish their task.
  */
 
-static void
-clientThread(void *clientArg)
+void*
+clientThreadWorker(void *clientArg)
 {
   int i;
   order_t *order = NULL;
@@ -180,7 +187,7 @@ clientThread(void *clientArg)
 
   for (i = 0; i < ca->nOrderPerThread; i++)
   {
-    order = Create_Order(0, 10, 0);
+    order = Create_Order(0, 1, 0);
 
     clientQueued = 0;
 
@@ -195,14 +202,14 @@ clientThread(void *clientArg)
        * finished. Update the buffer only if there is some space in it */
       {
         /* this is to idex the ring buffer */
-        /*       | Both client and trader start here, and they move left
+        /*       | Both client and trader start here, and they move left.
          *       v if client moves faster, it will wait for trader to finish
          * - - - - 
          * 3 2 1 0
          */
         int next = (BoundedBuffer->head + 1) % BoundedBuffer->size;
 
-        /* if head is 3 and size is 4, next will be 0. and if traderThread
+        /* if head is 3 and size is 4, next will be 0. and if traderThreadWorker
          * is still working on 0, then we need to wait for the trader
          * to finish
          */
@@ -227,29 +234,205 @@ clientThread(void *clientArg)
 
     Free_Order(order);
   }
+
+  return(NULL);
+}
+
+void*
+traderThreadWorker(void *traderArg)
+{
+  int i, next = 0;
+  int dequequed = 1;
+  int stockId = 0;
+  int debugPosition = 0;
+
+  trader_arg_t *ta;
+  BoundedBuffer_t *BoundedBuffer = NULL;
+  order_t *order = NULL;
+
+  /* the trader should lock the queue, take the order, 
+   * unlock, and consume it. During consumption it should also lock
+   * the market when it updates the stock quantity
+   */
+
+  ta = (trader_arg_t *) traderArg;
+
+  /* the trader thread just follows the clientthread, so this
+   * runs until the pthread_exit function has been called on
+   * all trader threads
+   */
+  while (1)
+  {
+    dequequed = 0;
+    while (dequequed == 0)
+    {
+      pthread_mutex_lock(&(ta->BoundedBuffer->bufLock));
+
+      /* empty order, wait for clientThreadWorker to queue order */
+      if (ta->BoundedBuffer->head == ta->BoundedBuffer->tail)
+      {
+        pthread_mutex_unlock(&(ta->BoundedBuffer->bufLock));
+
+        /* check if exit condition met, else continue;
+         * remember the done value is udated my main
+         */
+        if (*(ta->done) == 1)
+          pthread_exit(NULL);
+
+        continue;
+        /* check if we are done, if yes, then exit */
+      }
+      next = (ta->BoundedBuffer->tail + 1) % ta->BoundedBuffer->size;
+      ta->BoundedBuffer->tail = next;
+
+      order = ta->BoundedBuffer->queue[next];
+
+      /* Let go of this lock */
+      pthread_mutex_unlock(&(ta->BoundedBuffer->bufLock));
+      dequequed = 1;
+    }
+
+    /* Now consume this order with the market */
+    pthread_mutex_lock(&(ta->market->marketLock));
+
+    stockId = order->stockID;
+    if (order->action == 0)
+      ta->market->stocks[stockId] += order->quantity;
+    else
+    {
+      if ((ta->market->stocks[stockId] - order->quantity) >= 0)
+       ta->market->stocks[stockId] -= order->quantity;
+    }
+
+    pthread_mutex_unlock(&(ta->market->marketLock));
+
+    /* let the client know that the order has been fulfilled */
+    order->status = 1;
+
+    printf("Trader thread id %d.\n", ta->id);
+  }
+
+  return(NULL);
+}
+
+market_t *
+Allocate_Market(int marketSize)
+{
+  int i;
+  market_t *market = NULL;
+
+  market = (market_t *) malloc(sizeof(market_t));
+
+  market->quantity = marketSize;
+  market->stocks = (int *) malloc(market->quantity * sizeof(int));
+
+  /* init the memory */
+  memset(market->stocks, 0, sizeof(market->quantity * sizeof(int)));
+
+  /* At first we have 100000 of all stocks */
+  for (i = 0; i < marketSize; i++)
+    market->stocks[i] = 100000;
+
+  /* init the mutex lock */
+  pthread_mutex_init(&(market->marketLock), NULL);
+
+  return market;
 }
 
 static void
-traderThread(void *traderArg)
+Free_Market(market_t *market)
 {
-  int i;
+  if (NNULLP(market->stocks))
+  {
+    free(market->stocks);
+  }
+
+  market->stocks = NULL;
+  market->quantity = 0;
+  market = NULL;
 }
 
 int main(int argc, char **argv)
 {
-
-  /* Known variables */
-  int nBuf = 50;               /* Buffer size */
-  int nClientThreads = 1;
-  int nTraderThreads = 1;
-
-  int nMaxStocks = 500; 
+  int i, err = 0;
+  int done = 0;
 
   BoundedBuffer_t *BoundedBuffer = NULL;
 
-  BoundedBuffer = Create_Bounded_Buffer(nBuf);
+  /* Known variables */
+  int nBuf = 50;               /* Buffer size */
+  int nClientThreads = 4;
+  int nTraderThreads = 2;
 
-  /* A routine to free the memory */
+  int nMaxStocks = 500; 
+
+  /* pthread related variables */
+  pthread_t *traderThreads;
+  pthread_t *clientThreads;
+
+  trader_arg_t *ta = NULL;
+  client_arg_t *ca = NULL;
+
+  /* Market */
+  market_t *market = NULL;
+
+  BoundedBuffer = Create_Bounded_Buffer_And_Init_Order(nBuf);
+
+  /* allocate the market */
+  market = Allocate_Market(nMaxStocks);
+
+  /* Allocate threads, args etc */
+  traderThreads = (pthread_t *) malloc(sizeof(pthread_t) * nTraderThreads);
+  clientThreads = (pthread_t *) malloc(sizeof(pthread_t) * nClientThreads);
+  
+  ta = (trader_arg_t *) malloc(sizeof(trader_arg_t) * nTraderThreads); 
+  ca = (client_arg_t *) malloc(sizeof(client_arg_t) * nClientThreads); 
+
+  /* now set the arguments to threads */
+  for (i = 0; i < nClientThreads; i++)
+  {
+    ca[i].id = i;
+    ca[i].nOrderPerThread = 4;
+    ca[i].nClientThreads = nClientThreads;
+    ca[i].BoundedBuffer = BoundedBuffer;
+
+    err = pthread_create(&(clientThreads[i]), NULL, clientThreadWorker, (void *) &(ca[i]));;
+    if (err)
+      printf("\n Client thread creation errored out!");
+  }
+
+  done = 0; /* for trader thread */
+  for (i = 0; i < nTraderThreads; i++)
+  {
+    ta[i].id = i;
+    ta[i].nTraderThreads = nTraderThreads;
+    ta[i].BoundedBuffer = BoundedBuffer;
+    ta[i].done = &done;
+    ta[i].market = market;
+
+    err = pthread_create(&(traderThreads[i]), NULL, traderThreadWorker, (void *) &(ta[i]));
+    if (err)
+      printf("\n Trader thread creation errored out!");
+  }
+
+  /* Once the client threads are done, join their threads */
+  for (i = 0; i < nClientThreads; i++)
+  {
+    pthread_join(clientThreads[i], NULL);
+  }
+
+  /* Now let the trader threads know that we are DONE! */
+  done = 1;
+  for (i = 0; i < nTraderThreads; i++)
+  {
+    pthread_join(traderThreads[i], NULL);
+  }
+
+  Free_Market(market);
+  free(ca);
+  free(ta);
+  free(traderThreads);
+  free(clientThreads);
 
   return 0;
 

@@ -13,6 +13,8 @@ env = Environment()
 if (language == 'cpp'):
   env = Environment(CPPFLAGS = '-std=c++11')
 
+env['CFLAGS'] = '-g'
+
 # if MPI code set up 
 if (isMPI):
   if (language == 'cpp'):
