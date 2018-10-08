@@ -13,7 +13,8 @@ env = Environment()
 if (language == 'cpp'):
   env = Environment(CPPFLAGS = '-std=c++11')
 
-env['CFLAGS'] = '-g'
+if (language == 'c'):
+  env['CFLAGS'] = '-g -pthread'
 
 # if MPI code set up 
 if (isMPI):
@@ -32,7 +33,12 @@ if (isMPI):
 #print "CXX compiler is:", env['CXX']
 #print "CPPFLAGS is    :", env['CPPFLAGS']
 
+libs=['pthread']
+
+if (language == 'c'):
+  print "CFLAGS is    :", env['CFLAGS']
+
 SConscript('src/SConscript', variant_dir='build', duplicate=0, exports='env')
 
-env.Program(target=['build/exec.x'], source = 'build/main.o')
+env.Program(target=['build/exec.x'], source = 'build/main.o', LIBS=libs)
 

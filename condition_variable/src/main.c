@@ -363,6 +363,7 @@ int main(int argc, char **argv)
   int nBuf = 50;               /* Buffer size */
   int nClientThreads = 4;
   int nTraderThreads = 2;
+  int nOrderPerThread = 1000;
 
   int nMaxStocks = 500; 
 
@@ -392,7 +393,7 @@ int main(int argc, char **argv)
   for (i = 0; i < nClientThreads; i++)
   {
     ca[i].id = i;
-    ca[i].nOrderPerThread = 4;
+    ca[i].nOrderPerThread = nOrderPerThread;
     ca[i].nClientThreads = nClientThreads;
     ca[i].BoundedBuffer = BoundedBuffer;
 
